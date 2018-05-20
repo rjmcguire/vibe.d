@@ -3,7 +3,12 @@ import vibe.core.core;
 import vibe.http.client;
 
 import core.atomic;
-import std.datetime;
+
+static if (__VERSION__ >= 2076)
+	import std.datetime.stopwatch;
+else
+	import std.datetime;
+
 import std.functional;
 import std.stdio;
 
@@ -77,10 +82,14 @@ void benchmark()
 
 	long keep_alives = 0;
 	while (true) {
-		auto tm = sw.peek().msecs;
+		static if (__VERSION__ >= 2076)
+			auto tm = sw.peek().total!"msecs";
+		else
+			auto tm = sw.peek().msecs;
+
 		if (nreq >= nreqc && tm >= next_ts) {
 			writefln("%s iterations: %s req/s, %s err/s (%s active conn, %s disconnects/s)", nreq, (nreq*1_000)/tm, (nerr*1_000)/tm, nconn, (ndisconns*1_000)/tm);
-			nreqc += 1000;
+			nreqc.atomicOp!"+="(1000);
 			next_ts += 100;
 		}
 		bool disconnect = ++keep_alives >= g_maxKeepAliveRequests;
@@ -93,9 +102,9 @@ void benchmark()
 void main()
 {
 	import vibe.core.args;
-	readOption("c", &g_concurrency, "The maximum number of concurrent requests");
-	readOption("d", &g_requestDelay, "Artificial request delay in milliseconds");
-	readOption("k", &g_maxKeepAliveRequests, "Maximum number of keep-alive requests for each connection");
+	readOption("c", cast(long*) &g_concurrency, "The maximum number of concurrent requests");
+	readOption("d", cast(long*) &g_requestDelay, "Artificial request delay in milliseconds");
+	readOption("k", cast(long*) &g_maxKeepAliveRequests, "Maximum number of keep-alive requests for each connection");
 	if (!finalizeCommandLineOptions()) return;
 	runTask(toDelegate(&benchmark));
 	runEventLoop();

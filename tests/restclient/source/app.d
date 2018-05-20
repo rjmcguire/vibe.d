@@ -95,13 +95,13 @@ void assertHeader(ref InetHeaderMap headers, ShouldFail shouldFail, string heade
 void assertCorsHeaders(string url, HTTPMethod method, ShouldFail shouldFail, string origin)
 {
 	// preflight request
-	requestHTTP(url, 
+	requestHTTP(url,
 		(scope HTTPClientRequest req) {
 			req.method = HTTPMethod.OPTIONS;
 			req.headers["Origin"] = origin;
 			req.headers["Access-Control-Request-Method"] = method.to!string;
 			req.headers["Access-Control-Request-Headers"] = "Authorization";
-		}, 
+		},
 		(scope HTTPClientResponse res) {
 			res.headers.assertHeader(shouldFail,"Access-Control-Allow-Origin",origin);
 			res.headers.assertHeader(shouldFail,"Access-Control-Allow-Credentials","true");
@@ -111,11 +111,11 @@ void assertCorsHeaders(string url, HTTPMethod method, ShouldFail shouldFail, str
 		});
 
 	// normal request
-	requestHTTP(url, 
+	requestHTTP(url,
 		(scope HTTPClientRequest req) {
 			req.method = method;
 			req.headers["Origin"] = origin;
-		}, 
+		},
 		(scope HTTPClientResponse res) {
 			res.headers.assertHeader(shouldFail,"Access-Control-Allow-Origin",origin);
 			res.headers.assertHeader(shouldFail,"Access-Control-Allow-Credentials","true");
@@ -137,15 +137,15 @@ void assertCorsFails(string url, HTTPMethod method, string origin = "www.example
 // Since a CORS preflight also uses the OPTIONS method, we implemented the Allow header as well.
 void testAllowHeader(string url, HTTPMethod[] methods)
 {
-	import std.algorithm : joiner;
+	import std.algorithm : equal, joiner;
 	import std.conv : text;
-	string allow = methods.map!(m=>m.to!string).joiner(",").text;
-	requestHTTP(url, 
+	auto allow = methods.map!(m=>m.to!string);
+	requestHTTP(url,
 		(scope HTTPClientRequest req) {
 			req.method = HTTPMethod.OPTIONS;
-		}, 
+		},
 		(scope HTTPClientResponse res) {
-			res.headers.assertHeader(ShouldFail.No,"Allow",allow);
+			assert(equal(res.headers["Allow"].split(",").sort(), allow.array.sort()));
 			res.dropBody();
 		});
 }
@@ -162,7 +162,7 @@ void createRestTestInterface(URLRouter router, string path, string[] allowedOrig
 	corsRestSettings.baseURL = URL(path);
 	corsRestSettings.methodStyle = MethodStyle.lowerUnderscored;
 	corsRestSettings.allowedOrigins = allowedOrigins.dup;
-	registerRestInterface!ITestAPICors(router, new TestAPICors, corsRestSettings);	
+	registerRestInterface!ITestAPICors(router, new TestAPICors, corsRestSettings);
 }
 
 void runTest()
@@ -177,10 +177,13 @@ void runTest()
 
 	auto settings = new HTTPServerSettings;
 	settings.disableDistHost = true;
-	settings.port = 8000;
-	listenHTTP(settings, router);
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
+	immutable serverAddr = listenHTTP(settings, router).bindAddresses[0];
 
-	auto api = new RestInterfaceClient!ITestAPI("http://127.0.0.1:8000/root/");
+	immutable url = "http://" ~ serverAddr.toString;
+
+	auto api = new RestInterfaceClient!ITestAPI(url ~ "/root/");
 	assert(api.getInfo() == "description");
 	assert(api.info() == "description2");
 	assert(api.customParameters("one", "two") == "onetwo");
@@ -192,26 +195,25 @@ void runTest()
 	assert(api.sub.get(5) == 5);
 	assert(api.testKeyword(3, 4) == 7);
 
-	assertCorsFails("http://127.0.0.1:8000/cors1/foo", HTTPMethod.GET, "www.non-existent.com");
-	assertCorsPasses("http://127.0.0.1:8000/cors1/foo", HTTPMethod.GET, "www.foobar.com");
-	assertCorsPasses("http://127.0.0.1:8000/cors1/foo", HTTPMethod.GET, "www.example.com");
-	assertCorsPasses("http://127.0.0.1:8000/cors2/foo", HTTPMethod.GET, "www.abcdefg.com");
-	assertCorsPasses("http://127.0.0.1:8000/cors3/foo", HTTPMethod.GET, "www.foobar.com");
-	assertCorsFails("http://127.0.0.1:8000/cors3/foo", HTTPMethod.GET, "www.bazbaz.com");
+	assertCorsFails(url ~ "/cors1/foo", HTTPMethod.GET, "www.non-existent.com");
+	assertCorsPasses(url ~ "/cors1/foo", HTTPMethod.GET, "www.foobar.com");
+	assertCorsPasses(url ~ "/cors1/foo", HTTPMethod.GET, "www.example.com");
+	assertCorsPasses(url ~ "/cors2/foo", HTTPMethod.GET, "www.abcdefg.com");
+	assertCorsPasses(url ~ "/cors3/foo", HTTPMethod.GET, "www.foobar.com");
+	assertCorsFails(url ~ "/cors3/foo", HTTPMethod.GET, "www.bazbaz.com");
 
-	testAllowHeader("http://127.0.0.1:8000/cors1/foo",   [HTTPMethod.GET,HTTPMethod.PUT,HTTPMethod.POST]);
-	testAllowHeader("http://127.0.0.1:8000/cors1/bar/6", [HTTPMethod.POST,HTTPMethod.DELETE,HTTPMethod.PATCH]);
-	testAllowHeader("http://127.0.0.1:8000/cors1/7/foo", [HTTPMethod.PUT,HTTPMethod.POST,HTTPMethod.DELETE]);
-	testCors("http://127.0.0.1:8000/cors1/foo", 			[HTTPMethod.GET,HTTPMethod.PUT,HTTPMethod.POST]);
-	testCors("http://127.0.0.1:8000/cors1/bar/6", 		[HTTPMethod.POST,HTTPMethod.DELETE,HTTPMethod.PATCH]);
-	testCors("http://127.0.0.1:8000/cors1/7/foo", 		[HTTPMethod.PUT,HTTPMethod.POST,HTTPMethod.DELETE]);
+	testAllowHeader(url ~ "/cors1/foo",   [HTTPMethod.GET,HTTPMethod.PUT,HTTPMethod.POST]);
+	testAllowHeader(url ~ "/cors1/bar/6", [HTTPMethod.POST,HTTPMethod.DELETE,HTTPMethod.PATCH]);
+	testAllowHeader(url ~ "/cors1/7/foo", [HTTPMethod.PUT,HTTPMethod.POST,HTTPMethod.DELETE]);
+	testCors(url ~ "/cors1/foo", 			[HTTPMethod.GET,HTTPMethod.PUT,HTTPMethod.POST]);
+	testCors(url ~ "/cors1/bar/6", 		[HTTPMethod.POST,HTTPMethod.DELETE,HTTPMethod.PATCH]);
+	testCors(url ~ "/cors1/7/foo", 		[HTTPMethod.PUT,HTTPMethod.POST,HTTPMethod.DELETE]);
 
 	exitEventLoop(true);
 }
 
 int main()
 {
-	setLogLevel(LogLevel.debug_);
 	runTask(toDelegate(&runTest));
 	return runEventLoop();
 }

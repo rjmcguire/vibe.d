@@ -371,7 +371,11 @@ interface Example6API
 	// Finally, there is @bodyParam. It works as you expect it to work,
 	// currently serializing passed data as Json and pass them through the body.
 	@bodyParam("myFoo", "parameter")
-	string getConcat(FooType myFoo);
+	string postConcat(FooType myFoo);
+
+	// expects the entire body
+	@bodyParam("obj")
+	string postConcatBody(FooType obj);
 
 	struct FooType {
 		int a;
@@ -408,10 +412,15 @@ override:
 		return "False";
 	}
 
-	string getConcat(FooType myFoo)
+	string postConcat(FooType myFoo)
 	{
 		import std.conv : to;
 		return to!string(myFoo.a)~myFoo.s~to!string(myFoo.d);
+	}
+
+	string postConcatBody(FooType obj)
+	{
+		return postConcat(obj);
 	}
 }
 
@@ -441,18 +450,18 @@ class Example7 : Example7API {
 }
 
 
-void runTests()
+void runTests(string url)
 {
 	// Example 1
 	{
-		auto api = new RestInterfaceClient!Example1API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example1API(url);
 		assert(api.getSomeInfo() == "Some Info!");
 		assert(api.getter == "Getter");
 		assert(api.postSum(2, 3) == 5);
 	}
 	// Example 2
 	{
-		auto api = new RestInterfaceClient!Example2API("http://127.0.0.1:8080", MethodStyle.upperUnderscored);
+		auto api = new RestInterfaceClient!Example2API(url, MethodStyle.upperUnderscored);
 		Example2API.Aggregate[] data = [
 			{ "one", 1, Example2API.Aggregate.Type.Type1 },
 			{ "two", 2, Example2API.Aggregate.Type.Type2 }
@@ -464,21 +473,21 @@ void runTests()
 	}
 	// Example 3
 	{
-		auto api = new RestInterfaceClient!Example3API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example3API(url);
 		assert(api.getMyID(9000) == 9000);
 		assert(api.nestedModule.getNumber() == 42);
 		assert(api.nestedModule.getNumber(1) == 1);
 	}
 	// Example 4
 	{
-		auto api = new RestInterfaceClient!Example4API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example4API(url);
 		api.myNameDoesNotMatter();
 		assert(api.getParametersInURL("20", "30") == 50);
 		assert(api.querySpecialParameterNames(10, true) == -10);
 	}
 	// Example 5
 	{
-		auto api = new RestInterfaceClient!Example5API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example5API(url);
 		auto secret = api.getSecret(42, User.init);
 		assert(secret == "{secret #42 for admin}");
 	}
@@ -487,9 +496,9 @@ void runTests()
 		import vibe.http.client : requestHTTP;
 		import vibe.stream.operations : readAllUTF8;
 
-		auto api = new RestInterfaceClient!Example6API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example6API(url);
 		// First we make sure parameters are transmitted via headers.
-		auto res = requestHTTP("http://127.0.0.1:8080/example6_api/portal",
+		auto res = requestHTTP(url~ "/example6_api/portal",
 		                       (scope r) {
 			r.method = HTTPMethod.GET;
 			r.headers["Authorization"] = "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==";
@@ -519,19 +528,19 @@ void runTests()
 		import vibe.stream.operations : readAllUTF8;
 
 		// First we make sure parameters are transmitted via query.
-		auto res = requestHTTP("http://127.0.0.1:8080/example6_api/answer?qparam=Life_universe_and_the_rest",
+		auto res = requestHTTP(url~ "/example6_api/answer?qparam=Life_universe_and_the_rest",
 							   (scope r) { r.method = HTTPMethod.POST; });
 		assert(res.statusCode == 200);
 		assert(res.bodyReader.readAllUTF8() == `"True"`);
 		// Then we check that both can communicate together.
-		auto api = new RestInterfaceClient!Example6API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example6API(url);
 		auto answer = api.postAnswer("IDK");
 		assert(answer == "False");
 	}
 
 	// Example 7 -- Custom JSON response
 	{
-		auto api = new RestInterfaceClient!Example7API("http://127.0.0.1:8080");
+		auto api = new RestInterfaceClient!Example7API(url);
 		auto result = api.get();
 		assert(result["foo"] == 42 && result["bar"] == 13);
 	}
@@ -543,35 +552,47 @@ void runTests()
 
 		enum expected = "42fortySomething51.42"; // to!string(51.42) doesn't work at CT
 
-		auto api = new RestInterfaceClient!Example6API("http://127.0.0.1:8080");
-		// First we make sure parameters are transmitted via query.
-		auto res = requestHTTP("http://127.0.0.1:8080/example6_api/concat",
-							   (scope r) {
-						   import vibe.data.json;
-						   r.method = HTTPMethod.GET;
-						   Json obj = Json.emptyObject;
-						   obj["parameter"] = serializeToJson(Example6API.FooType(42, "fortySomething", 51.42));
-						   r.writeJsonBody(obj);
-					   });
+		auto api = new RestInterfaceClient!Example6API(url);
+		{
+			// First we make sure parameters are transmitted via query.
+			auto res = requestHTTP(url ~ "/example6_api/concat",
+								   (scope r) {
+							   import vibe.data.json;
+							   r.method = HTTPMethod.POST;
+							   Json obj = Json.emptyObject;
+							   obj["parameter"] = serializeToJson(Example6API.FooType(42, "fortySomething", 51.42));
+							   r.writeJsonBody(obj);
+						   });
 
-		assert(res.statusCode == 200);
-		assert(res.bodyReader.readAllUTF8() == `"`~expected~`"`);
-		// Then we check that both can communicate together.
-		auto answer = api.getConcat(Example6API.FooType(42, "fortySomething", 51.42));
-		assert(answer == expected);
+			assert(res.statusCode == 200);
+			assert(res.bodyReader.readAllUTF8() == `"`~expected~`"`);
+			// Then we check that both can communicate together.
+			auto answer = api.postConcat(Example6API.FooType(42, "fortySomething", 51.42));
+			assert(answer == expected);
+		}
+
+		// suppling the whole body
+		{
+			// First we make sure parameters are transmitted via query.
+			auto res = requestHTTP(url ~ "/example6_api/concat_body",
+								   (scope r) {
+							   import vibe.data.json;
+							   r.method = HTTPMethod.POST;
+							   Json obj = serializeToJson(Example6API.FooType(42, "fortySomething", 51.42));
+							   r.writeJsonBody(obj);
+						   });
+
+			assert(res.statusCode == 200);
+			assert(res.bodyReader.readAllUTF8() == `"`~expected~`"`);
+			// Then we check that both can communicate together.
+			auto answer = api.postConcatBody(Example6API.FooType(42, "fortySomething", 51.42));
+			assert(answer == expected);
+		}
 	}
 }
 
 shared static this()
 {
-	version (LDC) {
-		if (__VERSION__ == 2066) {
-			import core.stdc.stdlib;
-			logWarn("Warning: Skipping test due to codegen issue on LDC 0.15.x.");
-			exit(0);
-		}
-	}
-
 	// Registering our REST services in router
 	auto routes = new URLRouter;
 	registerRestInterface(routes, new Example1());
@@ -585,14 +606,13 @@ shared static this()
 	registerRestInterface(routes, new Example7());
 
 	auto settings = new HTTPServerSettings();
-	settings.port = 8080;
-	settings.bindAddresses = ["::1", "127.0.0.1"];
-
-	listenHTTP(settings, routes);
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
+	immutable serverAddr = listenHTTP(settings, routes).bindAddresses[0];
 
 	runTask({
 		try {
-			runTests();
+			runTests("http://" ~ serverAddr.toString);
 			logInfo("Success.");
 		} catch (Exception e) {
 			import core.stdc.stdlib : exit;

@@ -32,14 +32,17 @@ void testProtocol(TCPConnection server, bool terminate)
 		enforce(server.readLine() == "Bye bye!");
 		// should have closed within 500 ms
 		enforce(!server.waitForData(500.msecs));
-		assert(!server.connected, "Server still connected.");
+		assert(server.empty, "Server still connected.");
 	}
 }
 
 void runTest()
 {
+	import std.algorithm : find;
+	import std.socket : AddressFamily;
+
 	// server for a simple line based protocol
-	listenTCP(11001, (client) {
+	auto l1 = listenTCP(0, (client) {
 		while (!client.empty) {
 			auto ln = client.readLine();
 			if (ln == "quit") {
@@ -50,18 +53,19 @@ void runTest()
 
 			client.write(format("Hash: %08X\r\n", typeid(string).getHash(&ln)));
 		}
-	});
+	}).find!(l => l.bindAddress.family == AddressFamily.INET).front;
+	scope (exit) l1.stopListening;
 
 	// proxy server
-	listenTCP(11002, (client) {
-		auto server = connectTCP("127.0.0.1", 11001);
+	auto l2 = listenTCP(0, (client) {
+		auto server = connectTCP(l1.bindAddress);
 
 		// pipe server to client as long as the server connection is alive
-		auto t = runTask({
+		auto t = runTask!(TCPConnection, TCPConnection)((client, server) {
 			scope (exit) client.close();
 			client.write(server);
 			logInfo("Proxy 2 out");
-		});
+		}, client, server);
 
 		// pipe client to server as long as the client connection is alive
 		scope (exit) {
@@ -70,19 +74,20 @@ void runTest()
 		}
 		server.write(client);
 		logInfo("Proxy out");
-	});
+	}).find!(l => l.bindAddress.family == AddressFamily.INET).front;
+	scope (exit) l2.stopListening;
 
 	// test server
 	logInfo("Test protocol implementation on server");
-	testProtocol(connectTCP("127.0.0.1", 11001), false);
+	testProtocol(connectTCP(l2.bindAddress), false);
 	logInfo("Test protocol implementation on server with forced disconnect");
-	testProtocol(connectTCP("127.0.0.1", 11001), true);
+	testProtocol(connectTCP(l2.bindAddress), true);
 
 	// test proxy
 	logInfo("Test protocol implementation on proxy");
-	testProtocol(connectTCP("127.0.0.1", 11002), false);
+	testProtocol(connectTCP(l2.bindAddress), false);
 	logInfo("Test protocol implementation on proxy with forced disconnect");
-	testProtocol(connectTCP("127.0.0.1", 11002), true);
+	testProtocol(connectTCP(l2.bindAddress), true);
 }
 
 int main()
